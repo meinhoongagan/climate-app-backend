@@ -1,5 +1,6 @@
 const express = require('express');
 const connectDB = require('./db/db');
+const cors = require("cors")
 const dailyFootprintRoutes = require('./routes/dailyFootprintRoutes');
 const userRoutes = require('./routes/userRoutes'); // Import the user router
 const carbonReport = require('./routes/carbonReport')
@@ -12,6 +13,7 @@ connectDB();
 
 // Middleware
 app.use(express.json());
+app.use(cors());
 
 // Use the daily footprint and user routes
 app.use('/api/footprint', dailyFootprintRoutes);
