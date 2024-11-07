@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 // MongoDB connection URI
-const uri = process.env.MONGO_URI || 'mongodb://localhost:27017/carbon_footprint_tracker';
+const uri ='mongodb://127.0.0.1:27017/carbon_footprint_tracker';
 
 // Connect to MongoDB
 const connectDB = async () => {
