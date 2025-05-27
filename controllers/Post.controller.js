@@ -2,13 +2,17 @@ const mongoose = require("mongoose");
 const POST = require("../models/Post.models");
 const User = require("../models/User.js");
 const Comments = require("../models/Comments.model.js");
+const cloudinary = require("../lib/Cloudinary.js");
 
 // GET All Posts
 exports.GetAllPost = async (req, res) => {
   try {
     const posts = await POST.find({})
       .populate("author", "name email")
-      .populate("Comments");
+      .populate({
+        path: "Comments",
+        populate: { path: "author", select: "name" }
+      });
 
     return res.status(200).send({
       success: true,
@@ -31,7 +35,7 @@ exports.CreatePost = async (req, res) => {
     const { title, description, image, author } = req.body;
 
     if (!title || !description || !image || !author) {
-      return res.status(400).send({
+      return res.status(200).send({
         success: false,
         message: "Please provide all fields",
       });
@@ -44,8 +48,15 @@ exports.CreatePost = async (req, res) => {
         message: "User not found",
       });
     }
+    
+    let imageUrl;
+    if (image) {
+      const uploadResult = await cloudinary.uploader.upload(image);
+      console.log(uploadResult);
+      imageUrl = uploadResult.secure_url;
+    }
 
-    const newBlog = new POST({ title, description, image, author });
+    const newBlog = new POST({ title, description, image: imageUrl, author });
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -57,10 +68,18 @@ exports.CreatePost = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
+    // Populate the new blog for frontend
+    const populatedBlog = await POST.findById(newBlog._id)
+      .populate("author", "name email")
+      .populate({
+        path: "Comments",
+        populate: { path: "author", select: "name" }
+      });
+
     return res.status(201).send({
       success: true,
       message: "Post created successfully",
-      data: newBlog,
+      data: populatedBlog,
     });
   } catch (error) {
     console.log(error);
@@ -75,11 +94,13 @@ exports.CreatePost = async (req, res) => {
 // GET Post By ID
 exports.GetPostById = async (req, res) => {
   try {
-    const {id} = req.params;
+    const { id } = req.params;
     const blog = await POST.findById(id)
       .populate("author", "name email")
-      .populate("Comments");
-
+      .populate({
+        path: "Comments",
+        populate: { path: "author", select: "name" }
+      });
 
     if (!blog) {
       return res.status(404).send({
@@ -109,9 +130,15 @@ exports.UpdatePost = async (req, res) => {
     const { id } = req.params;
     const { title, description, image } = req.body;
 
+    let imageUrl = image;
+    if (image && image.startsWith("data:")) {
+      const uploadResult = await cloudinary.uploader.upload(image);
+      imageUrl = uploadResult.secure_url;
+    }
+
     const updatedBlog = await POST.findByIdAndUpdate(
       id,
-      { title, description, image },
+      { title, description, image: imageUrl },
       { new: true }
     );
 
@@ -177,8 +204,13 @@ exports.DeletePost = async (req, res) => {
 // GET Posts By User
 exports.userPost = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).populate("Blogs");
-    //todo : populate the comments
+    const user = await User.findById(req.params.id).populate({
+      path: "Blogs",
+      populate: [
+        { path: "author", select: "name email" },
+        { path: "Comments", populate: { path: "author", select: "name" } }
+      ]
+    });
 
     if (!user) {
       return res.status(404).send({
@@ -202,26 +234,31 @@ exports.userPost = async (req, res) => {
   }
 };
 
-
-// comments functionality
+// COMMENTS FUNCTIONALITY
 
 exports.addComment = async (req, res) => {
   try {
-    const {userid} =req.body;
-  const userId = userid;
-  const postId = req.params.postId;
-  const { content } = req.body;
+    const { userid, content } = req.body;
+    const userId = userid;
+    const postId = req.params.postId;
 
-  const comment = await Comments.create({
-    author: userId,
-    postId,
-    content,
-  });
+    const comment = await Comments.create({
+      author: userId,
+      postId,
+      content,
+    });
 
-  await User.findByIdAndUpdate(userId, { $push: { Comments: comment._id } });
-  await POST.findByIdAndUpdate(postId, { $push: { Comments: comment._id } });
+    await User.findByIdAndUpdate(userId, { $push: { Comments: comment._id } });
+    await POST.findByIdAndUpdate(postId, { $push: { Comments: comment._id } });
 
-  res.status(201).json(comment);
+    // Populate author for frontend
+    const populatedComment = await Comments.findById(comment._id).populate("author", "name");
+
+    res.status(201).send({
+      success: true,
+      message: "Comment added successfully",
+      data: populatedComment,
+    });
   } catch (error) {
     return res.status(500).send({
       success: false,
@@ -232,37 +269,36 @@ exports.addComment = async (req, res) => {
 };
 
 exports.likePost = async (req, res) => {
- try {
-  const {userid} =req.body; 
-  const userId = userid;
-  const postId = req.params.postId;
+  try {
+    const { userid } = req.body;
+    const userId = userid;
+    const postId = req.params.postId;
 
-  const post = await POST.findById(postId);
-  const user = await User.findById(userId);
+    const post = await POST.findById(postId);
+    const user = await User.findById(userId);
 
-  if (!post) return res.status(404).json({ message: 'Post not found' });
+    if (!post) return res.status(404).json({ message: 'Post not found' });
 
-  const isLiked = post.likes.some(id => id.toString() === userId);
+    const isLiked = post.likes.some(id => id.toString() === userId);
 
-  if (isLiked) {
-    post.likes.pull(userId);
-    user.likes.pull(postId);
-  } else {
-    post.likes.push(userId);
-    user.likes.push(postId);
-  }
+    if (isLiked) {
+      post.likes.pull(userId);
+      user.likes.pull(postId);
+    } else {
+      post.likes.push(userId);
+      user.likes.push(postId);
+    }
 
-  await post.save();
-  await user.save();
+    await post.save();
+    await user.save();
 
-  res.status(200).json({ liked: !isLiked });
- } catch (error) {
-   console.log(error);
-   return res.status(500).send({
+    res.status(200).json({ Liked: !isLiked });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).send({
       success: false,
       message: "Error in likes",
       error,
     });
- }
+  }
 };
-
