@@ -124,6 +124,33 @@ exports.GetPostById = async (req, res) => {
   }
 };
 
+exports.getUserPosts = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+   
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID' });
+    }
+
+    const posts = await POST.find({ author: userId }).populate({
+        path: 'author', 
+        select: 'name email'
+      });
+
+    if (!posts || posts.length === 0) {
+      return res.status(404).json({ message: 'No posts found for this user' });
+    }
+
+    res.status(200).json({
+      message: 'posts retrieved successfully',
+      posts: posts
+    });
+  } catch (err) {
+    console.error('Error querying posts:', err);
+    res.status(500).json({ error: 'Server error while retrieving posts' });
+  }
+};
+
 // UPDATE Post
 exports.UpdatePost = async (req, res) => {
   try {

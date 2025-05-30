@@ -4,7 +4,7 @@ const PostSchema = new mongoose.Schema({
     author:{
         type:mongoose.Schema.Types.ObjectId,
         ref:"User",
-        require: [true, "user id is required"],
+        required: true,
     },
     title:{
         type:String,

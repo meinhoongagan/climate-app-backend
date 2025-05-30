@@ -9,7 +9,8 @@ const {
     DeletePost,
     userPost,
     addComment,
-    likePost
+    likePost,
+    getUserPosts
 } = require("../controllers/Post.controller");
 
 // GET || All blogs
@@ -35,5 +36,7 @@ router.post("/comment/:postId",addComment);
 
 //POST || Like
 router.post("/like/:postId",likePost);
+
+router.get("/get-user-posts/:userId", getUserPosts)
 
 module.exports = router;
