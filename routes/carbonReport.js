@@ -3,9 +3,10 @@ const express = require('express');
 const router = express.Router();
 const DailyFootprint = require('../models/DailyFootprint');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { default: axios } = require("axios");
 
 // Google Gemini API key from environment variables
-const GOOGLE_GEMINI_API_KEY = process.env.GOOLE_GEMINI_API;
+const GOOGLE_GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API;
 
 // Route to generate the carbon footprint report based on user data
 router.get('/:userId', async (req, res) => {
@@ -34,9 +35,17 @@ router.get('/:userId', async (req, res) => {
 
     const result = await model.generateContent(prompt);
 
+    const reportText = result.response.text();
+
+    const pdfResponse = await axios.post(`${process.env.BACKEND_URL}/api/pdf/generate-pdf`, {
+      userId: userId,
+      text: reportText
+    });
+
     res.status(200).json({
       message: 'Carbon footprint report generated successfully.',
-      report: result.response.text()
+      report: result.response.text(),
+      pdf: pdfResponse.data
     });
 
   } catch (error) {
