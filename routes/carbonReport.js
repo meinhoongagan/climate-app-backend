@@ -1,85 +1,138 @@
-require("dotenv").config()
+require("dotenv").config();
 const express = require('express');
 const router = express.Router();
 const DailyFootprint = require('../models/DailyFootprint');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { default: axios } = require("axios");
+const axios = require("axios");
 
-// Google Gemini API key from environment variables
-const GOOGLE_GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API;
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API);
 
-// Route to generate the carbon footprint report based on user data
+function buildReportPrompt(userData, entryCount) {
+  return `
+You are an expert climate scientist and sustainability advisor. Analyze this user's carbon footprint data collected over their last ${entryCount} day(s) and generate a detailed, structured report in plain text (do not use markdown symbols like ** or ##).
+
+DATA:
+${JSON.stringify(userData, null, 2)}
+
+Structure the report exactly like this:
+
+CLIMATEGUARD - PERSONAL CARBON FOOTPRINT REPORT
+=================================================
+
+1. EXECUTIVE SUMMARY
+Brief 2-3 sentence overview of the user's environmental impact.
+
+2. FOOTPRINT BREAKDOWN BY CATEGORY
+Analyze transportation, energy usage, food consumption, waste management, water usage, and purchases based on the data.
+
+3. KEY FINDINGS
+List 3-5 specific observations about their habits (both positive and areas to improve).
+
+4. ESTIMATED CO2 IMPACT
+Provide rough CO2 equivalent estimates per category based on the data provided.
+
+5. PERSONALIZED RECOMMENDATIONS
+Give 5 specific, actionable recommendations tailored to this user's actual data.
+
+6. SUSTAINABILITY SCORE (out of 10)
+Rate each category and give an overall score with brief explanation.
+
+7. 30-DAY IMPROVEMENT PLAN
+A simple week-by-week action plan to reduce their footprint.
+
+Keep the tone encouraging, scientific, and practical.
+`;
+}
+
+// GET /api/carbon-report/:userId
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
 
   try {
-    const userFootprints = await DailyFootprint.find({ userId }).sort({ date: -1 }).limit(30);
+    const userFootprints = await DailyFootprint.find({ userId })
+      .sort({ date: -1 })
+      .limit(30);
 
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+    // No personal data yet — return a general guide
     if (!userFootprints || userFootprints.length === 0) {
-      return res.status(404).json({ message: 'No daily footprint data found for this user.' });
+      const prompt = `Write a comprehensive personal carbon footprint guide in plain text (no markdown ** or ## symbols) for a new user. Include:
+1. WELCOME TO CLIMATEGUARD - why tracking matters
+2. AVERAGE CARBON FOOTPRINT IN INDIA - statistics and breakdown by category
+3. TOP 5 WAYS TO REDUCE YOUR FOOTPRINT - actionable tips
+4. HOW TO USE THIS APP - what to log and why
+5. SUSTAINABILITY GOALS - suggested 30, 60, and 90 day targets
+Keep it encouraging and practical.`;
+
+      const result = await model.generateContent(prompt);
+      return res.status(200).json({
+        message: 'No personal data yet — generated a general guide.',
+        report: result.response.text(),
+        pdf: null,
+        hasPersonalData: false,
+      });
     }
 
+    // Build structured data for the prompt
     const userData = {
-      transportation: userFootprints.map(item => item.transportation),
-      energyUsage: userFootprints.map(item => item.energyUsage),
-      foodConsumption: userFootprints.map(item => item.foodConsumption),
-      wasteManagement: userFootprints.map(item => item.wasteManagement),
-      waterUsage: userFootprints.map(item => item.waterUsage),
-      purchases: userFootprints.map(item => item.purchases)
+      totalEntries: userFootprints.length,
+      transportation:  userFootprints.map(i => i.transportation),
+      energyUsage:     userFootprints.map(i => i.energyUsage),
+      foodConsumption: userFootprints.map(i => i.foodConsumption),
+      wasteManagement: userFootprints.map(i => i.wasteManagement),
+      waterUsage:      userFootprints.map(i => i.waterUsage),
+      purchases:       userFootprints.map(i => i.purchases),
     };
 
-    const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    const prompt = `Create a comprehensive carbon footprint report based on this data: ${JSON.stringify(userData)}`;
-
-    const result = await model.generateContent(prompt);
-
+    const result = await model.generateContent(buildReportPrompt(userData, userFootprints.length));
     const reportText = result.response.text();
 
-    const pdfResponse = await axios.post(`${process.env.BACKEND_URL}/api/pdf/generate-pdf`, {
-      userId: userId,
-      text: reportText
-    });
+    // PDF is optional — won't crash report if Cloudinary not configured
+    let pdfResult = null;
+    try {
+      const pdfResponse = await axios.post(
+        `${process.env.BACKEND_URL}/api/pdf/generate-pdf`,
+        { userId, text: reportText },
+        { timeout: 15000 }
+      );
+      pdfResult = pdfResponse.data;
+    } catch (pdfErr) {
+      console.warn('[CarbonReport] PDF skipped (Cloudinary not configured):', pdfErr.message);
+    }
 
-    res.status(200).json({
+    return res.status(200).json({
       message: 'Carbon footprint report generated successfully.',
-      report: result.response.text(),
-      pdf: pdfResponse.data
+      report: reportText,
+      pdf: pdfResult,
+      hasPersonalData: true,
+      entriesAnalyzed: userFootprints.length,
     });
 
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({
+    console.error('[CarbonReport] Error:', error.message);
+    return res.status(500).json({
       message: 'Error generating carbon footprint report',
-      error: error.message
+      error: error.message,
     });
   }
 });
 
-// Route to get 5 upcoming environmental events and policies
+// GET /api/carbon-report/environment/upcoming
 router.get('/environment/upcoming', async (req, res) => {
   try {
-    const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    const date = Date();
-
-    // Updated prompt to request general yearly information instead of real-time events
-    const prompt = `Provide a summary of major environmental events and policies that occur every year, including notable events like Earth Day, World Environment Day, and key policies or observances that support environmental awareness and conservation. No real-time data is needed.$`;
-
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const prompt = `List major annual global environmental events, observances, and policy milestones in plain text (no markdown). Include month/date, event name, brief description, and why it matters for climate action. Cover at least 12 events like Earth Day, World Environment Day, World Oceans Day, etc.`;
     const result = await model.generateContent(prompt);
-
-    res.status(200).json({
-      message: 'Annual environmental events and policies information retrieved successfully.',
-      annualEventsAndPolicies: result.response.text()
+    return res.status(200).json({
+      message: 'Environmental events retrieved successfully.',
+      annualEventsAndPolicies: result.response.text(),
     });
-
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({
-      message: 'Error fetching annual environmental events and policies',
-      error: error.message
+    console.error('[CarbonReport] Events error:', error.message);
+    return res.status(500).json({
+      message: 'Error fetching environmental events',
+      error: error.message,
     });
   }
 });
